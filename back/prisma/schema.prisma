@@ -1,0 +1,45 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Movie {
+  id       String    @id @default(uuid())
+  title    String
+  duration Int // minutos
+  sessions Session[]
+}
+
+model Session {
+  id           String        @id @default(uuid())
+  movieId      String
+  movie        Movie         @relation(fields: [movieId], references: [id])
+  roomId       String
+  startsAt     DateTime
+  reservations Reservation[]
+
+  @@index([startsAt])
+}
+
+model Reservation {
+  id        String            @id @default(uuid())
+  sessionId String
+  session   Session           @relation(fields: [sessionId], references: [id])
+  seat      String // "A5"
+  clientId  String // MVP sem login: id gerado no browser
+  status    ReservationStatus
+  createdAt DateTime          @default(now())
+  expiresAt DateTime
+
+  @@unique([sessionId, seat, status])
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  EXPIRED
+}

@@ -1,0 +1,8 @@
+node_modules
+.env
+dist
+.DS_Store
+
+# docs internos de planejamento (README.md NÃO entra aqui)
+ARQUITETURA.md
+CONVENCOES.md

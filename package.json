@@ -1,0 +1,14 @@
+{
+  "name": "cinelock",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix back run dev",
+    "build": "npm --prefix back run build",
+    "lint": "npm --prefix back run lint",
+    "test": "npm --prefix back run test",
+    "stress-test": "npm --prefix back run stress-test",
+    "db:migrate": "npm --prefix back run db:migrate",
+    "db:seed": "npm --prefix back run db:seed"
+  }
+}
