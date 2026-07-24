@@ -1,126 +1,118 @@
-import { useCallback, useEffect, useState } from 'react';
-import {
-  fetchSeats,
-  fetchSessions,
-  getClientId,
-  reserveSeat,
-  type SeatStatus,
-  type SessionSummary,
-} from './api';
+import { useEffect, useState } from 'react';
+import type { MovieDetail as MovieDetailData, MovieSession } from './api';
+import { Checkout } from './views/Checkout';
+import { MovieDetail } from './views/MovieDetail';
+import { SeatMap } from './views/SeatMap';
+import { Ticket } from './views/Ticket';
+import { Vitrine } from './views/Vitrine';
 
-const clientId = getClientId();
-const SEATS_REFRESH_MS = 5000;
+// Navegação simples por estado — o app tem poucas telas, não vale trazer react-router.
+type Purchase = { session: MovieSession; movieTitle: string; seats: string[] };
 
-function formatSessionLabel(session: SessionSummary): string {
-  const startsAt = new Date(session.startsAt);
-  const date = startsAt.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
-  const time = startsAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  return `${session.movie.title} — ${date} ${time} (${session.roomId})`;
-}
+type View =
+  | { name: 'vitrine' }
+  | { name: 'movie'; movieId: string }
+  | { name: 'seats'; session: MovieSession; movieTitle: string }
+  | { name: 'checkout'; purchase: Purchase }
+  | { name: 'ticket'; purchase: Purchase };
+
+type Theme = 'dark' | 'light';
 
 export function App(): React.JSX.Element {
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [sessionId, setSessionId] = useState<string>('');
-  const [seats, setSeats] = useState<SeatStatus[]>([]);
-  const [selectedSeats, setSelectedSeats] = useState<Set<string>>(new Set());
-  const [messages, setMessages] = useState<string[]>([]);
-
-  const refreshSeats = useCallback(async () => {
-    if (!sessionId) return;
-    setSeats(await fetchSeats(sessionId, clientId));
-  }, [sessionId]);
+  const [view, setView] = useState<View>({ name: 'vitrine' });
+  const [theme, setTheme] = useState<Theme>(
+    () => (localStorage.getItem('cinelock:theme') as Theme | null) ?? 'dark',
+  );
 
   useEffect(() => {
-    fetchSessions()
-      .then((loadedSessions) => {
-        setSessions(loadedSessions);
-        if (loadedSessions[0]) setSessionId(loadedSessions[0].id);
-      })
-      .catch(() => setMessages(['API fora do ar? Suba com npm run dev']));
-  }, []);
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('cinelock:theme', theme);
+  }, [theme]);
 
-  useEffect(() => {
-    setSelectedSeats(new Set());
-    void refreshSeats();
-    // Sem Socket.io ainda (Fase 2): polling leve pra ver reservas dos outros
-    const interval = setInterval(() => void refreshSeats(), SEATS_REFRESH_MS);
-    return () => clearInterval(interval);
-  }, [refreshSeats]);
-
-  function toggleSeat(seatStatus: SeatStatus): void {
-    if (seatStatus.status === 'reserved') return;
-    setSelectedSeats((current) => {
-      const next = new Set(current);
-      if (next.has(seatStatus.seat)) {
-        next.delete(seatStatus.seat);
-      } else {
-        next.add(seatStatus.seat);
-      }
-      return next;
-    });
-  }
-
-  async function reserveSelected(): Promise<void> {
-    const results = await Promise.all(
-      [...selectedSeats].map((seat) => reserveSeat(sessionId, seat, clientId)),
-    );
-    setMessages(results.map((result) => result.message));
-    setSelectedSeats(new Set());
-    await refreshSeats();
-  }
-
-  function seatClassName(seatStatus: SeatStatus): string {
-    if (seatStatus.mine) return 'seat mine';
-    if (seatStatus.status === 'reserved') return 'seat reserved';
-    if (selectedSeats.has(seatStatus.seat)) return 'seat selected';
-    return 'seat available';
-  }
+  const goHome = () => setView({ name: 'vitrine' });
+  const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
 
   return (
-    <main>
-      <h1>Cinelock</h1>
+    <>
+      <nav className="topbar">
+        <button className="brand" onClick={goHome}>
+          CINE<span className="brand-accent">LOCK</span>
+        </button>
+        <button
+          className="theme-toggle"
+          onClick={toggleTheme}
+          aria-label={theme === 'dark' ? 'Ativar modo claro' : 'Ativar modo escuro'}
+          title={theme === 'dark' ? 'Modo claro' : 'Modo escuro'}
+        >
+          {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+        </button>
+      </nav>
 
-      <select value={sessionId} onChange={(event) => setSessionId(event.target.value)}>
-        {sessions.map((session) => (
-          <option key={session.id} value={session.id}>
-            {formatSessionLabel(session)}
-          </option>
-        ))}
-      </select>
+      <main className="app-main">
+        {view.name === 'vitrine' && (
+          <Vitrine onSelectMovie={(movieId) => setView({ name: 'movie', movieId })} />
+        )}
 
-      <div className="screen">TELA</div>
+        {view.name === 'movie' && (
+          <MovieDetail
+            movieId={view.movieId}
+            onBack={goHome}
+            onSelectSession={(session: MovieSession, movie: MovieDetailData) =>
+              setView({ name: 'seats', session, movieTitle: movie.title })
+            }
+          />
+        )}
 
-      <div className="seat-grid">
-        {seats.map((seatStatus) => (
-          <button
-            key={seatStatus.seat}
-            className={seatClassName(seatStatus)}
-            onClick={() => toggleSeat(seatStatus)}
-            disabled={seatStatus.status === 'reserved'}
-          >
-            {seatStatus.seat}
-          </button>
-        ))}
-      </div>
+        {view.name === 'seats' && (
+          <SeatMap
+            session={view.session}
+            movieTitle={view.movieTitle}
+            onBack={goHome}
+            onReserved={(seats) =>
+              setView({
+                name: 'checkout',
+                purchase: { session: view.session, movieTitle: view.movieTitle, seats },
+              })
+            }
+          />
+        )}
 
-      <div className="legend">
-        <span className="seat available">livre</span>
-        <span className="seat selected">selecionado</span>
-        <span className="seat reserved">reservado</span>
-        <span className="seat mine">seu</span>
-      </div>
+        {view.name === 'checkout' && (
+          <Checkout
+            session={view.purchase.session}
+            movieTitle={view.purchase.movieTitle}
+            seats={view.purchase.seats}
+            onConfirmed={() => setView({ name: 'ticket', purchase: view.purchase })}
+            onCancel={goHome}
+          />
+        )}
 
-      <button className="reserve-button" onClick={() => void reserveSelected()} disabled={selectedSeats.size === 0}>
-        Reservar {selectedSeats.size > 0 ? `(${selectedSeats.size})` : ''}
-      </button>
+        {view.name === 'ticket' && (
+          <Ticket
+            session={view.purchase.session}
+            movieTitle={view.purchase.movieTitle}
+            seats={view.purchase.seats}
+            onFinish={goHome}
+          />
+        )}
+      </main>
+    </>
+  );
+}
 
-      {messages.length > 0 && (
-        <ul className="messages">
-          {messages.map((message) => (
-            <li key={message}>{message}</li>
-          ))}
-        </ul>
-      )}
-    </main>
+function SunIcon(): React.JSX.Element {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </svg>
+  );
+}
+
+function MoonIcon(): React.JSX.Element {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+    </svg>
   );
 }
