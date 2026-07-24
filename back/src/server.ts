@@ -10,6 +10,7 @@ import {
 } from 'fastify-type-provider-zod';
 import { env } from './env.js';
 import { rateLimitRedis } from './redis.js';
+import { movieRoutes } from './movies/routes.js';
 import { reservationRoutes } from './reservations/routes.js';
 import { sessionRoutes } from './sessions/routes.js';
 
@@ -44,6 +45,7 @@ await app.register(fastifySwagger, {
 });
 await app.register(fastifySwaggerUi, { routePrefix: '/docs' });
 
+await app.register(movieRoutes);
 await app.register(sessionRoutes);
 await app.register(reservationRoutes);
 

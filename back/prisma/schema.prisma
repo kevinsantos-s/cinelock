@@ -8,10 +8,19 @@ datasource db {
 }
 
 model Movie {
-  id       String    @id @default(uuid())
-  title    String
-  duration Int // minutos
-  sessions Session[]
+  id          String    @id @default(uuid())
+  tmdbId      Int       @unique
+  title       String
+  duration    Int // minutos
+  synopsis    String
+  tagline     String?
+  posterUrl   String?
+  backdropUrl String?
+  genre       String // gêneros em pt-BR, separados por vírgula
+  rating      String // classificação indicativa BR ("L", "10", "12", "14", "16", "18")
+  year        Int
+  voteAverage Float
+  sessions    Session[]
 }
 
 model Session {

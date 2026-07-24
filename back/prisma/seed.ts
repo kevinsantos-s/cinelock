@@ -1,14 +1,28 @@
 import { PrismaClient, ReservationStatus } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { ALL_SEATS } from '../src/seatMap.js';
+import { fetchMovies } from './tmdb.js';
 
 const prisma = new PrismaClient();
 
-const MOVIES = [
-  { title: 'Duna: Parte Três', duration: 165 },
-  { title: 'O Iluminado', duration: 146 },
-  { title: 'Interestelar', duration: 169 },
-  { title: 'Parasita', duration: 132 },
+// 15 filmes reconhecíveis pra vitrine parecer um cinema de verdade.
+// Os dados (pôster, sinopse, duração, gênero, classificação) vêm do TMDB.
+const MOVIE_TITLES = [
+  'Duna: Parte Dois',
+  'Oppenheimer',
+  'Interestelar',
+  'A Origem',
+  'Parasita',
+  'O Poderoso Chefão',
+  'Cidade de Deus',
+  'Coringa',
+  'Vingadores: Ultimato',
+  'Homem-Aranha: Através do Aranhaverso',
+  'Pulp Fiction: Tempo de Violência',
+  'Clube da Luta',
+  'Matrix',
+  'O Senhor dos Anéis: A Sociedade do Anel',
+  'Divertida Mente 2',
 ] as const;
 
 const SESSION_HOURS = [14, 17, 20];
@@ -20,6 +34,14 @@ function pickRandomSeats(count: number): string[] {
 }
 
 async function main(): Promise<void> {
+  const token = process.env.TMDB_READ_TOKEN;
+  if (!token) {
+    throw new Error('TMDB_READ_TOKEN ausente no .env — necessário pra popular o catálogo.');
+  }
+
+  console.log('Buscando filmes no TMDB...');
+  const movies = await fetchMovies(MOVIE_TITLES, token);
+
   await prisma.reservation.deleteMany();
   await prisma.session.deleteMany();
   await prisma.movie.deleteMany();
@@ -27,7 +49,7 @@ async function main(): Promise<void> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  for (const [movieIndex, movieData] of MOVIES.entries()) {
+  for (const [movieIndex, movieData] of movies.entries()) {
     const movie = await prisma.movie.create({ data: movieData });
 
     for (let day = 0; day < DAYS_AHEAD; day++) {
@@ -39,7 +61,7 @@ async function main(): Promise<void> {
         const session = await prisma.session.create({
           data: {
             movieId: movie.id,
-            roomId: `sala-${movieIndex + 1}`,
+            roomId: `sala-${(movieIndex % 6) + 1}`,
             startsAt,
           },
         });

@@ -1,11 +1,28 @@
 // Configurável por ambiente: local cai no fallback, produção define VITE_API_URL.
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 
-export type SessionSummary = {
+export type Movie = {
+  id: string;
+  title: string;
+  duration: number;
+  tagline: string | null;
+  posterUrl: string | null;
+  backdropUrl: string | null;
+  genre: string;
+  rating: string;
+  year: number;
+  voteAverage: number;
+};
+
+export type MovieSession = {
   id: string;
   roomId: string;
   startsAt: string;
-  movie: { id: string; title: string; duration: number };
+};
+
+export type MovieDetail = Movie & {
+  synopsis: string;
+  sessions: MovieSession[];
 };
 
 export type SeatStatus = {
@@ -23,10 +40,16 @@ export function getClientId(): string {
   return clientId;
 }
 
-export async function fetchSessions(): Promise<SessionSummary[]> {
-  const response = await fetch(`${API_URL}/sessions`);
-  if (!response.ok) throw new Error(`Erro ao buscar sessões (${response.status})`);
-  return (await response.json()) as SessionSummary[];
+export async function fetchMovies(): Promise<Movie[]> {
+  const response = await fetch(`${API_URL}/movies`);
+  if (!response.ok) throw new Error(`Erro ao buscar filmes (${response.status})`);
+  return (await response.json()) as Movie[];
+}
+
+export async function fetchMovie(movieId: string): Promise<MovieDetail> {
+  const response = await fetch(`${API_URL}/movies/${movieId}`);
+  if (!response.ok) throw new Error(`Erro ao buscar filme (${response.status})`);
+  return (await response.json()) as MovieDetail;
 }
 
 export async function fetchSeats(sessionId: string, clientId: string): Promise<SeatStatus[]> {
@@ -55,4 +78,25 @@ export async function reserveSeat(
 
   const body = (await response.json()) as { message?: string };
   return { seat, ok: false, message: body.message ?? `Erro ${response.status} no assento ${seat}` };
+}
+
+export type ConfirmResult =
+  | { ok: true }
+  | { ok: false; message: string };
+
+export async function confirmReservations(
+  sessionId: string,
+  seats: string[],
+  clientId: string,
+): Promise<ConfirmResult> {
+  const response = await fetch(`${API_URL}/reservations/confirm`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, seats, clientId }),
+  });
+
+  if (response.ok) return { ok: true };
+
+  const body = (await response.json()) as { message?: string };
+  return { ok: false, message: body.message ?? `Erro ${response.status} ao confirmar` };
 }

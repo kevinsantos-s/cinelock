@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n api,front -c blue,green \"tsx watch src/server.ts\" \"npm --prefix ../front run dev\"",
+    "dev": "concurrently -n api,front -c blue,green \"tsx watch --env-file=.env src/server.ts\" \"npm --prefix ../front run dev\"",
     "build": "tsc",
     "lint": "eslint src scripts prisma",
     "test": "echo \"sem testes ainda\" && exit 0",

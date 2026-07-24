@@ -50,3 +50,41 @@ export async function reserveSeat(
     throw error;
   }
 }
+
+export type ConfirmResult =
+  | { ok: true; reservations: Reservation[] }
+  | { ok: false; reason: 'session-not-found' | 'nothing-pending' };
+
+// Segundo passo do fluxo: o cliente tem 5 minutos pra confirmar os assentos que
+// segurou (PENDING). Confirmar troca pra CONFIRMED — aí o assento fica vendido de
+// vez, e não depende mais do TTL do lock no Redis.
+export async function confirmReservations(
+  sessionId: string,
+  seats: string[],
+  clientId: string,
+): Promise<ConfirmResult> {
+  const session = await prisma.session.findUnique({ where: { id: sessionId } });
+  if (!session) {
+    return { ok: false, reason: 'session-not-found' };
+  }
+
+  const pending = await prisma.reservation.findMany({
+    where: { sessionId, seat: { in: seats }, clientId, status: 'PENDING' },
+  });
+  if (pending.length === 0) {
+    return { ok: false, reason: 'nothing-pending' };
+  }
+
+  const reservations: Reservation[] = [];
+  for (const held of pending) {
+    const confirmed = await prisma.reservation.update({
+      where: { id: held.id },
+      data: { status: 'CONFIRMED' },
+    });
+    // O lock cumpriu seu papel; o CONFIRMED no Postgres passa a ser a fonte da verdade.
+    // Deixamos o TTL no Redis expirar sozinho — não há corrida a proteger mais.
+    reservations.push(confirmed);
+  }
+
+  return { ok: true, reservations };
+}
