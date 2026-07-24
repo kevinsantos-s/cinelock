@@ -15,4 +15,14 @@ export const reservationResponseSchema = z.object({
   expiresAt: z.date(),
 });
 
+export const confirmReservationSchema = z.object({
+  sessionId: z.string().uuid(),
+  seats: z.array(z.string().regex(/^[A-Z]\d+$/)).min(1),
+  clientId: z.string().uuid(),
+});
+
+export const confirmResponseSchema = z.object({
+  reservations: z.array(reservationResponseSchema),
+});
+
 export const errorSchema = z.object({ message: z.string() });
