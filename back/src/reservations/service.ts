@@ -5,22 +5,45 @@ import { isValidSeat, seatLockKey } from '../seatMap.js';
 
 export const RESERVATION_TTL_SECONDS = 300;
 
-export type ReserveSeatResult =
-  | { ok: true; reservation: Reservation }
-  | { ok: false; reason: 'invalid-seat' | 'session-not-found' | 'seat-taken' };
+export type SeatFailure = { seat: string; reason: 'invalid-seat' | 'seat-taken' };
 
-export async function reserveSeat(
+export type ReserveSeatsResult =
+  | { ok: false; reason: 'session-not-found' }
+  | { ok: true; held: Reservation[]; failed: SeatFailure[] };
+
+export async function reserveSeats(
   sessionId: string,
-  seat: string,
+  seats: string[],
   clientId: string,
-): Promise<ReserveSeatResult> {
-  if (!isValidSeat(seat)) {
-    return { ok: false, reason: 'invalid-seat' };
-  }
-
+): Promise<ReserveSeatsResult> {
   const session = await prisma.session.findUnique({ where: { id: sessionId } });
   if (!session) {
     return { ok: false, reason: 'session-not-found' };
+  }
+
+  const held: Reservation[] = [];
+  const failed: SeatFailure[] = [];
+
+  for (const seat of new Set(seats)) {
+    const result = await holdSeat(sessionId, seat, clientId);
+    if (result.ok) held.push(result.reservation);
+    else failed.push({ seat, reason: result.reason });
+  }
+
+  return { ok: true, held, failed };
+}
+
+type HoldSeatResult =
+  | { ok: true; reservation: Reservation }
+  | { ok: false; reason: 'invalid-seat' | 'seat-taken' };
+
+async function holdSeat(
+  sessionId: string,
+  seat: string,
+  clientId: string,
+): Promise<HoldSeatResult> {
+  if (!isValidSeat(seat)) {
+    return { ok: false, reason: 'invalid-seat' };
   }
 
   const confirmedReservation = await prisma.reservation.findUnique({
@@ -30,7 +53,7 @@ export async function reserveSeat(
     return { ok: false, reason: 'seat-taken' };
   }
 
-  // Coração da concorrência: só grava se a chave não existir, com TTL de 5 minutos.
+  // Só grava se a chave não existir, com TTL de 5 minutos.
   // Dois requests simultâneos → o Redis processa um por vez, o segundo falha no NX.
   const lockKey = seatLockKey(sessionId, seat);
   const lockAcquired = await redis.set(lockKey, clientId, 'EX', RESERVATION_TTL_SECONDS, 'NX');

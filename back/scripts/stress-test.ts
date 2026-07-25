@@ -7,7 +7,8 @@ const CONCURRENT_REQUESTS = 30;
 
 type SessionSummary = { id: string; movie: { title: string } };
 type SeatStatus = { seat: string; status: 'available' | 'reserved' };
-type AttemptResult = { requestNumber: number; status: number; durationMs: number };
+type AttemptResult = { requestNumber: number; held: boolean; status: number; durationMs: number };
+type BatchResponse = { held: unknown[]; failed: unknown[] };
 
 async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_URL}${path}`);
@@ -26,10 +27,17 @@ async function attemptReservation(
   const response = await fetch(`${API_URL}/reservations`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sessionId, seat, clientId: randomUUID() }),
+    body: JSON.stringify({ sessionId, seats: [seat], clientId: randomUUID() }),
   });
   const durationMs = performance.now() - startedAt;
-  return { requestNumber, status: response.status, durationMs };
+
+  // O endpoint em lote responde 200 sempre; quem segurou o assento é quem tem `held`.
+  let held = false;
+  if (response.status === 200) {
+    const body = (await response.json()) as BatchResponse;
+    held = body.held.length > 0;
+  }
+  return { requestNumber, held, status: response.status, durationMs };
 }
 
 async function main(): Promise<void> {
@@ -56,18 +64,22 @@ async function main(): Promise<void> {
   );
 
   for (const result of results) {
-    const outcome = result.status === 201 ? '201 Created ✓' : `${result.status} Conflict`;
+    const outcome = result.held
+      ? 'held ✓'
+      : result.status === 200
+        ? 'seat-taken'
+        : `${result.status} erro`;
     console.log(`Request #${result.requestNumber} → ${outcome} (${result.durationMs.toFixed(1)}ms)`);
   }
 
-  const created = results.filter((result) => result.status === 201).length;
-  const conflicts = results.filter((result) => result.status === 409).length;
+  const created = results.filter((result) => result.held).length;
+  const conflicts = results.filter((result) => result.status === 200 && !result.held).length;
   const others = results.length - created - conflicts;
   const durations = results.map((result) => result.durationMs).sort((a, b) => a - b);
   const p50 = durations[Math.floor(durations.length / 2)] ?? 0;
   const max = durations[durations.length - 1] ?? 0;
 
-  console.log(`\nResultado: ${created} sucesso / ${conflicts} conflitos (409) / ${others} outros`);
+  console.log(`\nResultado: ${created} sucesso / ${conflicts} seat-taken / ${others} outros`);
   console.log(`Latência: p50 ${p50.toFixed(1)}ms, máx ${max.toFixed(1)}ms`);
 
   if (created !== 1) {
