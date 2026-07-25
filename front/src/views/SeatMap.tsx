@@ -2,14 +2,31 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   fetchSeats,
   getClientId,
-  reserveSeat,
+  reserveSeats,
   type MovieSession,
+  type SeatFailure,
   type SeatStatus,
 } from '../api';
 import { formatDayLabel, formatTime } from '../format';
 
 const clientId = getClientId();
 const SEATS_REFRESH_MS = 5000;
+const TOAST_MS = 4000;
+// Espelha MAX_SEATS_PER_RESERVATION do backend. Aqui é só UX — quem impede de
+// verdade é a validação no servidor; isto evita frustrar o usuário na hora de reservar.
+const MAX_SEATS = 5;
+
+// Monta um aviso legível a partir dos assentos que falharam.
+function describeFailures(failed: SeatFailure[]): string {
+  const taken = failed.filter((item) => item.reason === 'seat-taken').map((item) => item.seat);
+  const invalid = failed.filter((item) => item.reason === 'invalid-seat').map((item) => item.seat);
+
+  const parts: string[] = [];
+  if (taken.length === 1) parts.push(`Assento ${taken[0]} já foi reservado`);
+  else if (taken.length > 1) parts.push(`Assentos ${taken.join(', ')} já foram reservados`);
+  if (invalid.length > 0) parts.push(`Assento(s) ${invalid.join(', ')} inválido(s)`);
+  return parts.join(' · ');
+}
 
 type SeatMapProps = {
   session: MovieSession;
@@ -21,8 +38,19 @@ type SeatMapProps = {
 export function SeatMap({ session, movieTitle, onBack, onReserved }: SeatMapProps): React.JSX.Element {
   const [seats, setSeats] = useState<SeatStatus[]>([]);
   const [selectedSeats, setSelectedSeats] = useState<Set<string>>(new Set());
-  const [messages, setMessages] = useState<string[]>([]);
+  const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
   const [reserving, setReserving] = useState(false);
+
+  // Toast some sozinho depois de alguns segundos. O `id` reinicia o timer a cada aviso novo.
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), TOAST_MS);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  function showToast(text: string): void {
+    setToast({ id: Date.now(), text });
+  }
 
   const refreshSeats = useCallback(async () => {
     setSeats(await fetchSeats(session.id, clientId));
@@ -40,8 +68,16 @@ export function SeatMap({ session, movieTitle, onBack, onReserved }: SeatMapProp
     if (seatStatus.status === 'reserved') return;
     setSelectedSeats((current) => {
       const next = new Set(current);
-      if (next.has(seatStatus.seat)) next.delete(seatStatus.seat);
-      else next.add(seatStatus.seat);
+      if (next.has(seatStatus.seat)) {
+        next.delete(seatStatus.seat);
+      } else {
+        // Desmarcar sempre é permitido; só o "marcar mais um" respeita o teto.
+        if (next.size >= MAX_SEATS) {
+          showToast(`Máximo de ${MAX_SEATS} ingressos por compra`);
+          return current;
+        }
+        next.add(seatStatus.seat);
+      }
       return next;
     });
   }
@@ -50,20 +86,20 @@ export function SeatMap({ session, movieTitle, onBack, onReserved }: SeatMapProp
     const chosen = [...selectedSeats];
     setReserving(true);
     try {
-      const results = await Promise.all(
-        chosen.map((seat) => reserveSeat(session.id, seat, clientId)),
-      );
-      const heldSeats = results.filter((result) => result.ok).map((result) => result.seat);
+      // Um request só pro lote inteiro — nada de N chamadas em paralelo.
+      const { held, failed } = await reserveSeats(session.id, chosen, clientId);
 
       // Só avança pro checkout se conseguimos segurar todos os assentos escolhidos.
-      if (heldSeats.length === chosen.length) {
-        onReserved(heldSeats);
+      if (failed.length === 0) {
+        onReserved(held);
         return;
       }
 
-      setMessages(results.filter((result) => !result.ok).map((result) => result.message));
+      showToast(describeFailures(failed));
       setSelectedSeats(new Set());
       await refreshSeats();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Erro ao reservar');
     } finally {
       setReserving(false);
     }
@@ -129,12 +165,10 @@ export function SeatMap({ session, movieTitle, onBack, onReserved }: SeatMapProp
           : `Reservar ${selectedSeats.size > 0 ? `(${selectedSeats.size})` : ''}`}
       </button>
 
-      {messages.length > 0 && (
-        <ul className="messages">
-          {messages.map((message) => (
-            <li key={message}>{message}</li>
-          ))}
-        </ul>
+      {toast && (
+        <div className="toast" role="status" aria-live="polite" key={toast.id}>
+          {toast.text}
+        </div>
       )}
     </section>
   );

@@ -59,25 +59,35 @@ export async function fetchSeats(sessionId: string, clientId: string): Promise<S
   return body.seats;
 }
 
-export type ReservationResult = { seat: string; ok: boolean; message: string };
+export type SeatFailure = { seat: string; reason: 'invalid-seat' | 'seat-taken' };
 
-export async function reserveSeat(
+export type ReserveSeatsResult = {
+  held: string[];
+  failed: SeatFailure[];
+};
+
+// Um request só pro lote inteiro de assentos. Devolve os que seguramos e os que falharam.
+export async function reserveSeats(
   sessionId: string,
-  seat: string,
+  seats: string[],
   clientId: string,
-): Promise<ReservationResult> {
+): Promise<ReserveSeatsResult> {
   const response = await fetch(`${API_URL}/reservations`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sessionId, seat, clientId }),
+    body: JSON.stringify({ sessionId, seats, clientId }),
   });
 
-  if (response.status === 201) {
-    return { seat, ok: true, message: `Assento ${seat} reservado por 5 minutos` };
+  if (!response.ok) {
+    const body = (await response.json()) as { message?: string };
+    throw new Error(body.message ?? `Erro ${response.status} ao reservar`);
   }
 
-  const body = (await response.json()) as { message?: string };
-  return { seat, ok: false, message: body.message ?? `Erro ${response.status} no assento ${seat}` };
+  const body = (await response.json()) as {
+    held: { seat: string }[];
+    failed: SeatFailure[];
+  };
+  return { held: body.held.map((reservation) => reservation.seat), failed: body.failed };
 }
 
 export type ConfirmResult =
