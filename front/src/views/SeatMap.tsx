@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  fetchPendingReservation,
   fetchSeats,
   getClientId,
   reserveSeats,
@@ -7,16 +8,21 @@ import {
   type SeatFailure,
   type SeatStatus,
 } from '../api';
+import { getSocket, type SeatReleasedEvent, type SeatReservedEvent } from '../socket';
+import { SeatGrid } from './SeatGrid';
 import { formatDayLabel, formatTime } from '../format';
 
 const clientId = getClientId();
-const SEATS_REFRESH_MS = 5000;
+const SEATS_REFRESH_MS = 30000;
 const TOAST_MS = 4000;
-// Espelha MAX_SEATS_PER_RESERVATION do backend. Aqui é só UX — quem impede de
-// verdade é a validação no servidor; isto evita frustrar o usuário na hora de reservar.
-const MAX_SEATS = 5;
+const MAX_SEATS = 6;
 
-// Monta um aviso legível a partir dos assentos que falharam.
+function formatMMSS(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
 function describeFailures(failed: SeatFailure[]): string {
   const taken = failed.filter((item) => item.reason === 'seat-taken').map((item) => item.seat);
   const invalid = failed.filter((item) => item.reason === 'invalid-seat').map((item) => item.seat);
@@ -33,15 +39,32 @@ type SeatMapProps = {
   movieTitle: string;
   onBack: () => void;
   onReserved: (seats: string[]) => void;
+  onResume: (seats: string[], expiresAt: string) => void;
 };
 
-export function SeatMap({ session, movieTitle, onBack, onReserved }: SeatMapProps): React.JSX.Element {
+export function SeatMap({
+  session,
+  movieTitle,
+  onBack,
+  onReserved,
+  onResume,
+}: SeatMapProps): React.JSX.Element {
   const [seats, setSeats] = useState<SeatStatus[]>([]);
   const [selectedSeats, setSelectedSeats] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
   const [reserving, setReserving] = useState(false);
+  // Reserva pendente (segura sem confirmar) pra oferecer "retomar compra" ao voltar.
+  const [pendingResume, setPendingResume] = useState<{ seats: string[]; expiresAt: string } | null>(
+    null,
+  );
+  const [nowMs, setNowMs] = useState(Date.now());
 
-  // Toast some sozinho depois de alguns segundos. O `id` reinicia o timer a cada aviso novo.
+  // Espelha a seleção num ref pra o handler do socket ler o valor atual sem recriar o listener.
+  const selectedSeatsRef = useRef(selectedSeats);
+  useEffect(() => {
+    selectedSeatsRef.current = selectedSeats;
+  }, [selectedSeats]);
+
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), TOAST_MS);
@@ -59,10 +82,79 @@ export function SeatMap({ session, movieTitle, onBack, onReserved }: SeatMapProp
   useEffect(() => {
     setSelectedSeats(new Set());
     void refreshSeats();
-    // Sem Socket.io ainda (Fase 2): polling leve pra ver reservas dos outros
     const interval = setInterval(() => void refreshSeats(), SEATS_REFRESH_MS);
     return () => clearInterval(interval);
   }, [refreshSeats]);
+
+  // Ao abrir, verifica se este cliente já tem assentos segurados sem confirmar.
+  useEffect(() => {
+    void fetchPendingReservation(session.id, clientId).then((pending) => {
+      if (pending.seats.length > 0 && pending.expiresAt) {
+        setPendingResume({ seats: pending.seats, expiresAt: pending.expiresAt });
+      }
+    });
+  }, [session.id]);
+
+  // Contador do aviso de "retomar compra" — só corre quando há reserva pendente.
+  useEffect(() => {
+    if (!pendingResume) return;
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [pendingResume]);
+
+  useEffect(() => {
+    const socket = getSocket();
+    const joinRoom = (): void => {
+      socket.emit('join', session.id);
+    };
+    joinRoom();
+    socket.on('connect', joinRoom);
+
+    const onSeatReserved = (event: SeatReservedEvent): void => {
+      if (event.sessionId !== session.id) return;
+      const reserved = new Set(event.seats);
+      setSeats((current) =>
+        current.map((seatStatus) =>
+          reserved.has(seatStatus.seat) ? { ...seatStatus, status: 'reserved' } : seatStatus,
+        ),
+      );
+
+      // Se um assento que EU tinha selecionado foi levado por outro, avisa e tira da seleção.
+      const takenFromMine = event.seats.filter((seat) => selectedSeatsRef.current.has(seat));
+      if (takenFromMine.length === 1) {
+        showToast(`Assento ${takenFromMine[0]} acabou de ser reservado por outra pessoa`);
+      } else if (takenFromMine.length > 1) {
+        showToast(`Assentos ${takenFromMine.join(', ')} acabaram de ser reservados por outros`);
+      }
+      setSelectedSeats((current) => {
+        const next = new Set(current);
+        for (const seat of event.seats) next.delete(seat);
+        return next;
+      });
+    };
+    socket.on('seat:reserved', onSeatReserved);
+
+    // Assento liberado (reserva expirou sem confirmar) volta a ficar disponível.
+    const onSeatReleased = (event: SeatReleasedEvent): void => {
+      if (event.sessionId !== session.id) return;
+      const released = new Set(event.seats);
+      setSeats((current) =>
+        current.map((seatStatus) =>
+          released.has(seatStatus.seat)
+            ? { ...seatStatus, status: 'available', mine: false }
+            : seatStatus,
+        ),
+      );
+    };
+    socket.on('seat:released', onSeatReleased);
+
+    return () => {
+      socket.emit('leave', session.id);
+      socket.off('connect', joinRoom);
+      socket.off('seat:reserved', onSeatReserved);
+      socket.off('seat:released', onSeatReleased);
+    };
+  }, [session.id]);
 
   function toggleSeat(seatStatus: SeatStatus): void {
     if (seatStatus.status === 'reserved') return;
@@ -71,7 +163,6 @@ export function SeatMap({ session, movieTitle, onBack, onReserved }: SeatMapProp
       if (next.has(seatStatus.seat)) {
         next.delete(seatStatus.seat);
       } else {
-        // Desmarcar sempre é permitido; só o "marcar mais um" respeita o teto.
         if (next.size >= MAX_SEATS) {
           showToast(`Máximo de ${MAX_SEATS} ingressos por compra`);
           return current;
@@ -86,10 +177,8 @@ export function SeatMap({ session, movieTitle, onBack, onReserved }: SeatMapProp
     const chosen = [...selectedSeats];
     setReserving(true);
     try {
-      // Um request só pro lote inteiro — nada de N chamadas em paralelo.
       const { held, failed } = await reserveSeats(session.id, chosen, clientId);
 
-      // Só avança pro checkout se conseguimos segurar todos os assentos escolhidos.
       if (failed.length === 0) {
         onReserved(held);
         return;
@@ -112,6 +201,11 @@ export function SeatMap({ session, movieTitle, onBack, onReserved }: SeatMapProp
     return 'seat available';
   }
 
+  const resumeSecondsLeft = pendingResume
+    ? Math.max(0, Math.floor((new Date(pendingResume.expiresAt).getTime() - nowMs) / 1000))
+    : 0;
+  const showResume = pendingResume !== null && resumeSecondsLeft > 0;
+
   return (
     <section className="seatmap">
       <button className="btn-back btn-back--solid" onClick={onBack}>
@@ -125,20 +219,41 @@ export function SeatMap({ session, movieTitle, onBack, onReserved }: SeatMapProp
         </p>
       </header>
 
+      {showResume && pendingResume && (
+        <div className="resume-banner">
+          <div className="resume-info">
+            <span className="resume-title">
+              Você tem {pendingResume.seats.length}{' '}
+              {pendingResume.seats.length > 1 ? 'assentos reservados' : 'assento reservado'}
+            </span>
+            <span className="resume-sub">
+              {pendingResume.seats.join(', ')} · confirme em {formatMMSS(resumeSecondsLeft)}
+            </span>
+          </div>
+          <button
+            className="btn-primary resume-btn"
+            onClick={() => onResume(pendingResume.seats, pendingResume.expiresAt)}
+          >
+            Continuar compra
+          </button>
+        </div>
+      )}
+
       <div className="screen">TELA</div>
 
-      <div className="seat-grid">
-        {seats.map((seatStatus) => (
+      <SeatGrid
+        seats={seats}
+        renderSeat={(seatStatus) => (
           <button
-            key={seatStatus.seat}
             className={seatClassName(seatStatus)}
             onClick={() => toggleSeat(seatStatus)}
             disabled={seatStatus.status === 'reserved'}
+            title={seatStatus.seat}
           >
-            {seatStatus.seat}
+            {seatStatus.seat.slice(1)}
           </button>
-        ))}
-      </div>
+        )}
+      />
 
       <div className="legend">
         <span className="legend-item">

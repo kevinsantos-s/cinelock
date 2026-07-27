@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { confirmReservations, getClientId, type MovieSession } from '../api';
+import { cancelReservations, confirmReservations, getClientId, type MovieSession } from '../api';
 import { formatDayLabel, formatTime } from '../format';
 
 const clientId = getClientId();
@@ -9,6 +9,8 @@ type CheckoutProps = {
   session: MovieSession;
   movieTitle: string;
   seats: string[];
+  // Numa compra retomada, o tempo restante vem daqui; numa nova, começa do TTL cheio.
+  expiresAt?: string;
   onConfirmed: () => void;
   onCancel: () => void;
 };
@@ -19,14 +21,20 @@ function formatCountdown(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function initialSeconds(expiresAt: string | undefined): number {
+  if (!expiresAt) return HOLD_SECONDS;
+  return Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
+}
+
 export function Checkout({
   session,
   movieTitle,
   seats,
+  expiresAt,
   onConfirmed,
   onCancel,
 }: CheckoutProps): React.JSX.Element {
-  const [secondsLeft, setSecondsLeft] = useState(HOLD_SECONDS);
+  const [secondsLeft, setSecondsLeft] = useState(() => initialSeconds(expiresAt));
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,6 +57,12 @@ export function Checkout({
     } else {
       setError(result.message);
     }
+  }
+
+  // Cancelar libera os assentos na hora (não espera os 5 min do lock expirarem).
+  async function cancel(): Promise<void> {
+    await cancelReservations(session.id, seats, clientId);
+    onCancel();
   }
 
   return (
@@ -85,7 +99,7 @@ export function Checkout({
         {error && <p className="checkout-error">{error}</p>}
 
         <div className="checkout-actions">
-          <button className="btn-ghost" onClick={onCancel}>
+          <button className="btn-ghost" onClick={() => void cancel()}>
             Cancelar
           </button>
           <button

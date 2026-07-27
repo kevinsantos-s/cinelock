@@ -1,29 +1,10 @@
-import { PrismaClient, ReservationStatus } from '@prisma/client';
+import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { PrismaClient, ReservationStatus } from '@prisma/client';
 import { ALL_SEATS } from '../src/seatMap.js';
-import { fetchMovies } from './tmdb.js';
+import type { TmdbMovie } from './tmdb.js';
 
 const prisma = new PrismaClient();
-
-// 15 filmes reconhecíveis pra vitrine parecer um cinema de verdade.
-// Os dados (pôster, sinopse, duração, gênero, classificação) vêm do TMDB.
-const MOVIE_TITLES = [
-  'Duna: Parte Dois',
-  'Oppenheimer',
-  'Interestelar',
-  'A Origem',
-  'Parasita',
-  'O Poderoso Chefão',
-  'Cidade de Deus',
-  'Coringa',
-  'Vingadores: Ultimato',
-  'Homem-Aranha: Através do Aranhaverso',
-  'Pulp Fiction: Tempo de Violência',
-  'Clube da Luta',
-  'Matrix',
-  'O Senhor dos Anéis: A Sociedade do Anel',
-  'Divertida Mente 2',
-] as const;
 
 const SESSION_HOURS = [14, 17, 20];
 const DAYS_AHEAD = 3;
@@ -33,14 +14,15 @@ function pickRandomSeats(count: number): string[] {
   return shuffled.slice(0, count);
 }
 
-async function main(): Promise<void> {
-  const token = process.env.TMDB_READ_TOKEN;
-  if (!token) {
-    throw new Error('TMDB_READ_TOKEN ausente no .env — necessário pra popular o catálogo.');
-  }
+// Catálogo congelado (prisma/movies.json) — o site não depende do TMDB pra existir.
+// Pra atualizar os dados: npm run refresh-movies (precisa do token).
+async function loadMovies(): Promise<TmdbMovie[]> {
+  const raw = await readFile(new URL('./movies.json', import.meta.url), 'utf-8');
+  return JSON.parse(raw) as TmdbMovie[];
+}
 
-  console.log('Buscando filmes no TMDB...');
-  const movies = await fetchMovies(MOVIE_TITLES, token);
+async function main(): Promise<void> {
+  const movies = await loadMovies();
 
   await prisma.reservation.deleteMany();
   await prisma.session.deleteMany();

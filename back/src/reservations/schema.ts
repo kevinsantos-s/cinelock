@@ -2,9 +2,9 @@ import { z } from 'zod';
 
 const seatCode = z.string().regex(/^[A-Z]\d+$/);
 
-// Regra de negócio: no máximo 5 ingressos por compra (anti-cambista, padrão de mercado).
+// Regra de negócio: no máximo 6 ingressos por compra (anti-cambista, padrão de mercado).
 // Fonte da verdade — o front reflete isso, mas quem impede de verdade é o backend.
-export const MAX_SEATS_PER_RESERVATION = 5;
+export const MAX_SEATS_PER_RESERVATION = 6;
 
 export const createReservationSchema = z.object({
   sessionId: z.string().uuid(),
@@ -12,18 +12,10 @@ export const createReservationSchema = z.object({
   clientId: z.string().uuid(),
 });
 
-export const reservationResponseSchema = z.object({
-  id: z.string().uuid(),
-  sessionId: z.string().uuid(),
-  seat: z.string(),
-  clientId: z.string().uuid(),
-  status: z.enum(['PENDING', 'CONFIRMED', 'EXPIRED']),
-  expiresAt: z.date(),
-});
-
-// Resposta do lote: o que conseguimos segurar e o que falhou (com o motivo por assento).
+// Resposta do lote: os assentos que seguramos e os que falharam (com o motivo).
+// Só os códigos dos assentos — a reserva no Postgres é gravada async pelo consumer.
 export const batchReservationResponseSchema = z.object({
-  held: z.array(reservationResponseSchema),
+  held: z.array(z.string()),
   failed: z.array(
     z.object({
       seat: z.string(),
@@ -39,7 +31,22 @@ export const confirmReservationSchema = z.object({
 });
 
 export const confirmResponseSchema = z.object({
-  reservations: z.array(reservationResponseSchema),
+  seats: z.array(z.string()),
+});
+
+// Cancelar reusa o mesmo formato de entrada/saída do confirmar.
+export const cancelReservationSchema = confirmReservationSchema;
+export const cancelResponseSchema = z.object({
+  released: z.array(z.string()),
+});
+
+export const pendingQuerySchema = z.object({
+  sessionId: z.string().uuid(),
+  clientId: z.string().uuid(),
+});
+export const pendingResponseSchema = z.object({
+  seats: z.array(z.string()),
+  expiresAt: z.date().nullable(),
 });
 
 export const errorSchema = z.object({ message: z.string() });

@@ -9,6 +9,17 @@ export function isValidSeat(seat: string): boolean {
   return ALL_SEATS.includes(seat);
 }
 
+const SEAT_LOCK_PREFIX = 'seat:';
+
 export function seatLockKey(sessionId: string, seat: string): string {
-  return `seat:${sessionId}:${seat}`;
+  return `${SEAT_LOCK_PREFIX}${sessionId}:${seat}`;
+}
+
+// Extrai sessão e assento de uma chave de lock (ex.: "seat:<uuid>:A5"). Retorna
+// null pra chaves que não são de assento — o listener de expiração ignora o resto.
+export function parseSeatLockKey(key: string): { sessionId: string; seat: string } | null {
+  if (!key.startsWith(SEAT_LOCK_PREFIX)) return null;
+  const [, sessionId, seat] = key.split(':');
+  if (!sessionId || !seat) return null;
+  return { sessionId, seat };
 }

@@ -6,9 +6,10 @@ Sistema de reserva de assentos de cinema focado em **concorrência distribuída*
 
 ```
 cinelock/
-├── back/     API Fastify + Prisma + Redis (backend)
+├── back/     API Fastify + Prisma + Redis + Kafka (API + consumer)
 ├── front/    React + Vite (frontend)
-└── docker-compose.yml   infra: Postgres + Redis
+├── docker-compose.yml        infra: Postgres + Redis + Kafka
+└── docker-compose.full.yml   override que sobe também API + consumer + front
 ```
 
 ## Stack
@@ -35,6 +36,21 @@ npm run dev                   # sobe API (3000) + front (5173) juntos
 - Swagger: http://localhost:3000/docs
 
 Os comandos na raiz (`dev`, `db:migrate`, `db:seed`, `lint`, `stress-test`) delegam pro `back/`.
+
+## Rodar tudo com Docker (API + consumer + front + infra)
+
+Sobe a aplicação inteira containerizada — infra (Postgres, Redis, Kafka) **mais** API, consumer e front num comando só:
+
+```bash
+cp back/.env.example back/.env     # preencha o TMDB_READ_TOKEN
+docker compose -f docker-compose.yml -f docker-compose.full.yml up --build -d
+docker compose -f docker-compose.yml -f docker-compose.full.yml --profile seed run --rm seed
+```
+
+- Front: http://localhost:8080
+- API: http://localhost:3000
+
+As migrations rodam sozinhas (serviço `migrate`); o `seed` popula o catálogo (precisa do token do TMDB). No dia a dia de desenvolvimento continua valendo o modo acima (`docker compose up -d` só da infra + `npm run dev`).
 
 ## Testando a concorrência
 
@@ -65,6 +81,6 @@ A constraint `@@unique([sessionId, seat, status])` no Postgres é a última linh
 ## Roadmap
 
 - [x] Fase 1 — MVP: lock no Redis, rate limiting, Swagger, stress test, front básico
-- [ ] Fase 2 — Kafka (KRaft) + Socket.io em tempo real + expiração via keyspace notifications
-- [ ] Fase 3 — Docker Compose completo (API, consumer, front)
+- [x] Fase 2 — Kafka (KRaft) + Socket.io em tempo real + expiração via keyspace notifications
+- [x] Fase 3 — Docker Compose completo (API, consumer, front)
 - [ ] Fase 4 — Deploy em VPS com Nginx + HTTPS

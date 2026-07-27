@@ -1,25 +1,37 @@
 import { useEffect, useState } from 'react';
 import type { MovieDetail as MovieDetailData, MovieSession } from './api';
 import { Checkout } from './views/Checkout';
+import { DemoConcurrency } from './views/DemoConcurrency';
 import { MovieDetail } from './views/MovieDetail';
 import { SeatMap } from './views/SeatMap';
 import { Ticket } from './views/Ticket';
 import { Vitrine } from './views/Vitrine';
 
 // Navegação simples por estado — o app tem poucas telas, não vale trazer react-router.
-type Purchase = { session: MovieSession; movieTitle: string; seats: string[] };
+// `expiresAt` presente quando é uma compra retomada — o checkout usa o tempo restante.
+type Purchase = {
+  session: MovieSession;
+  movieTitle: string;
+  seats: string[];
+  expiresAt?: string;
+};
 
 type View =
   | { name: 'vitrine' }
   | { name: 'movie'; movieId: string }
   | { name: 'seats'; session: MovieSession; movieTitle: string }
   | { name: 'checkout'; purchase: Purchase }
-  | { name: 'ticket'; purchase: Purchase };
+  | { name: 'ticket'; purchase: Purchase }
+  | { name: 'demo' };
+
+const DEMO_PATH = '/demo/concurrency';
 
 type Theme = 'dark' | 'light';
 
 export function App(): React.JSX.Element {
-  const [view, setView] = useState<View>({ name: 'vitrine' });
+  const [view, setView] = useState<View>(() =>
+    window.location.pathname.startsWith('/demo') ? { name: 'demo' } : { name: 'vitrine' },
+  );
   const [theme, setTheme] = useState<Theme>(
     () => (localStorage.getItem('cinelock:theme') as Theme | null) ?? 'dark',
   );
@@ -29,7 +41,14 @@ export function App(): React.JSX.Element {
     localStorage.setItem('cinelock:theme', theme);
   }, [theme]);
 
-  const goHome = () => setView({ name: 'vitrine' });
+  const goHome = () => {
+    window.history.pushState(null, '', '/');
+    setView({ name: 'vitrine' });
+  };
+  const goDemo = () => {
+    window.history.pushState(null, '', DEMO_PATH);
+    setView({ name: 'demo' });
+  };
   const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
 
   return (
@@ -37,6 +56,12 @@ export function App(): React.JSX.Element {
       <nav className="topbar">
         <button className="brand" onClick={goHome}>
           CINE<span className="brand-accent">LOCK</span>
+        </button>
+        <button className="nav-demo-link" onClick={goDemo}>
+          <FlaskIcon />
+          <span>
+            demo <span className="nav-demo-accent">concorrência</span>
+          </span>
         </button>
         <button
           className="theme-toggle"
@@ -74,6 +99,12 @@ export function App(): React.JSX.Element {
                 purchase: { session: view.session, movieTitle: view.movieTitle, seats },
               })
             }
+            onResume={(seats, expiresAt) =>
+              setView({
+                name: 'checkout',
+                purchase: { session: view.session, movieTitle: view.movieTitle, seats, expiresAt },
+              })
+            }
           />
         )}
 
@@ -82,6 +113,7 @@ export function App(): React.JSX.Element {
             session={view.purchase.session}
             movieTitle={view.purchase.movieTitle}
             seats={view.purchase.seats}
+            expiresAt={view.purchase.expiresAt}
             onConfirmed={() => setView({ name: 'ticket', purchase: view.purchase })}
             onCancel={goHome}
           />
@@ -95,8 +127,19 @@ export function App(): React.JSX.Element {
             onFinish={goHome}
           />
         )}
+
+        {view.name === 'demo' && <DemoConcurrency onBack={goHome} />}
       </main>
     </>
+  );
+}
+
+function FlaskIcon(): React.JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 3h6M10 3v6.5L5.2 17a2 2 0 0 0 1.7 3h10.2a2 2 0 0 0 1.7-3L14 9.5V3" />
+      <path d="M7.5 14h9" />
+    </svg>
   );
 }
 
