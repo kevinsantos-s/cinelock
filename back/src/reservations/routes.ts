@@ -2,12 +2,21 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
   batchReservationResponseSchema,
+  cancelReservationSchema,
+  cancelResponseSchema,
   confirmReservationSchema,
   confirmResponseSchema,
   createReservationSchema,
   errorSchema,
+  pendingQuerySchema,
+  pendingResponseSchema,
 } from './schema.js';
-import { confirmReservations, reserveSeats } from './service.js';
+import {
+  cancelReservations,
+  confirmReservations,
+  getPendingReservation,
+  reserveSeats,
+} from './service.js';
 
 export async function reservationRoutes(app: FastifyInstance): Promise<void> {
   const typedApp = app.withTypeProvider<ZodTypeProvider>();
@@ -64,7 +73,7 @@ export async function reservationRoutes(app: FastifyInstance): Promise<void> {
       const result = await confirmReservations(sessionId, seats, clientId);
 
       if (result.ok) {
-        return reply.status(200).send({ reservations: result.reservations });
+        return reply.status(200).send({ seats: result.seats });
       }
 
       if (result.reason === 'session-not-found') {
@@ -74,5 +83,35 @@ export async function reservationRoutes(app: FastifyInstance): Promise<void> {
         message: 'Nenhuma reserva pendente encontrada — o tempo pode ter expirado.',
       });
     },
+  );
+
+  typedApp.post(
+    '/reservations/cancel',
+    {
+      schema: {
+        tags: ['reservations'],
+        summary: 'Cancela assentos segurados antes de confirmar (libera na hora)',
+        body: cancelReservationSchema,
+        response: { 200: cancelResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const { sessionId, seats, clientId } = request.body;
+      const released = await cancelReservations(sessionId, seats, clientId);
+      return reply.status(200).send({ released });
+    },
+  );
+
+  typedApp.get(
+    '/reservations/pending',
+    {
+      schema: {
+        tags: ['reservations'],
+        summary: 'Assentos que o cliente segura sem confirmar numa sessão (retomar compra)',
+        querystring: pendingQuerySchema,
+        response: { 200: pendingResponseSchema },
+      },
+    },
+    async (request) => getPendingReservation(request.query.sessionId, request.query.clientId),
   );
 }

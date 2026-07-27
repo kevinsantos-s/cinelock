@@ -4,13 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n api,front -c blue,green \"tsx watch --env-file=.env src/server.ts\" \"npm --prefix ../front run dev\"",
+    "dev": "concurrently -n api,consumer,front -c blue,magenta,green \"tsx watch --env-file=.env src/server.ts\" \"tsx watch --env-file=.env src/consumer.ts\" \"npm --prefix ../front run dev\"",
+    "consumer": "tsx --env-file=.env src/consumer.ts",
     "build": "tsc",
     "lint": "eslint src scripts prisma",
     "test": "echo \"sem testes ainda\" && exit 0",
     "stress-test": "tsx scripts/stress-test.ts",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "refresh-movies": "tsx --env-file=.env scripts/refresh-movies.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -21,9 +23,13 @@
     "@fastify/swagger": "^9.4.0",
     "@fastify/swagger-ui": "^5.2.0",
     "@prisma/client": "^6.8.0",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "@socket.io/redis-emitter": "^5.1.0",
     "fastify": "^5.2.0",
     "fastify-type-provider-zod": "^4.0.2",
     "ioredis": "^5.4.2",
+    "kafkajs": "^2.2.4",
+    "socket.io": "^4.8.3",
     "zod": "^3.24.1"
   },
   "devDependencies": {

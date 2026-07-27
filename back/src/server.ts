@@ -9,7 +9,10 @@ import {
   validatorCompiler,
 } from 'fastify-type-provider-zod';
 import { env } from './env.js';
+import { connectProducer } from './kafka.js';
+import { initRealtime } from './realtime.js';
 import { rateLimitRedis } from './redis.js';
+import { demoRoutes } from './demo/routes.js';
 import { movieRoutes } from './movies/routes.js';
 import { reservationRoutes } from './reservations/routes.js';
 import { sessionRoutes } from './sessions/routes.js';
@@ -48,5 +51,9 @@ await app.register(fastifySwaggerUi, { routePrefix: '/docs' });
 await app.register(movieRoutes);
 await app.register(sessionRoutes);
 await app.register(reservationRoutes);
+await app.register(demoRoutes);
+
+initRealtime(app);
+await connectProducer();
 
 await app.listen({ port: env.PORT, host: '0.0.0.0' });
