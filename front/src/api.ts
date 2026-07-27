@@ -1,5 +1,7 @@
-// Configurável por ambiente: local cai no fallback, produção define VITE_API_URL.
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+
+// Mensagem amigável quando bate no rate limit (HTTP 429).
+const TOO_MANY_REQUESTS = 'Muitas tentativas seguidas. Espere alguns segundos e tente de novo.';
 
 export type Movie = {
   id: string;
@@ -52,6 +54,13 @@ export async function fetchMovie(movieId: string): Promise<MovieDetail> {
   return (await response.json()) as MovieDetail;
 }
 
+export type SessionSummary = {
+  id: string;
+  roomId: string;
+  startsAt: string;
+  movie: { id: string; title: string; duration: number };
+};
+
 export async function fetchSeats(sessionId: string, clientId: string): Promise<SeatStatus[]> {
   const response = await fetch(`${API_URL}/sessions/${sessionId}/seats?clientId=${clientId}`);
   if (!response.ok) throw new Error(`Erro ao buscar assentos (${response.status})`);
@@ -79,15 +88,13 @@ export async function reserveSeats(
   });
 
   if (!response.ok) {
+    if (response.status === 429) throw new Error(TOO_MANY_REQUESTS);
     const body = (await response.json()) as { message?: string };
     throw new Error(body.message ?? `Erro ${response.status} ao reservar`);
   }
 
-  const body = (await response.json()) as {
-    held: { seat: string }[];
-    failed: SeatFailure[];
-  };
-  return { held: body.held.map((reservation) => reservation.seat), failed: body.failed };
+  const body = (await response.json()) as { held: string[]; failed: SeatFailure[] };
+  return { held: body.held, failed: body.failed };
 }
 
 export type ConfirmResult =
@@ -109,4 +116,71 @@ export async function confirmReservations(
 
   const body = (await response.json()) as { message?: string };
   return { ok: false, message: body.message ?? `Erro ${response.status} ao confirmar` };
+}
+
+// Cancela os assentos segurados (o cliente desistiu). Best-effort — não bloqueia
+// a navegação de volta se falhar.
+export async function cancelReservations(
+  sessionId: string,
+  seats: string[],
+  clientId: string,
+): Promise<void> {
+  await fetch(`${API_URL}/reservations/cancel`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, seats, clientId }),
+  });
+}
+
+export type PendingReservation = { seats: string[]; expiresAt: string | null };
+
+// Assentos que este cliente segura sem confirmar (pra oferecer "retomar compra").
+export async function fetchPendingReservation(
+  sessionId: string,
+  clientId: string,
+): Promise<PendingReservation> {
+  const response = await fetch(
+    `${API_URL}/reservations/pending?sessionId=${sessionId}&clientId=${clientId}`,
+  );
+  if (!response.ok) return { seats: [], expiresAt: null };
+  return (await response.json()) as PendingReservation;
+}
+
+export type RaceAttempt = { attempt: number; won: boolean };
+export type RaceResult = {
+  seat: string;
+  attempts: number;
+  winners: number;
+  durationMs: number;
+  results: RaceAttempt[];
+};
+
+// A demo tem sessão própria e isolada (o servidor sempre opera nela).
+export async function fetchDemoSession(): Promise<SessionSummary> {
+  const response = await fetch(`${API_URL}/demo/session`);
+  if (!response.ok) throw new Error(`Erro ao buscar sessão da demo (${response.status})`);
+  return (await response.json()) as SessionSummary;
+}
+
+// Simulação de concorrência: um request só, e o servidor dispara as N tentativas
+// no mesmo assento em paralelo.
+export async function runReservationRace(seat: string, attempts: number): Promise<RaceResult> {
+  const response = await fetch(`${API_URL}/demo/reserve-race`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ seat, attempts }),
+  });
+
+  if (!response.ok) {
+    if (response.status === 429) throw new Error(TOO_MANY_REQUESTS);
+    const body = (await response.json()) as { message?: string };
+    throw new Error(body.message ?? `Erro ${response.status} na simulação`);
+  }
+
+  return (await response.json()) as RaceResult;
+}
+
+// Reseta a sala da demo. Best-effort — ignora falha.
+export async function resetDemoRoom(): Promise<void> {
+  await fetch(`${API_URL}/demo/reset`, { method: 'POST' });
 }
