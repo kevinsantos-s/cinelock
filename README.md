@@ -1,86 +1,108 @@
 # Cinelock
 
-Sistema de reserva de assentos de cinema focado em **concorrência distribuída**: dois usuários nunca reservam o mesmo assento, mesmo com dezenas de requisições simultâneas. O lock é um único comando atômico no Redis (`SET NX EX`).
+Sistema de reserva de assentos de cinema construído pra responder uma pergunta difícil de sistemas distribuídos: **como garantir que duas pessoas nunca comprem o mesmo assento, mesmo com dezenas de requisições chegando no mesmo milissegundo?**
 
-## Estrutura
+## O problema que ele resolve
+
+Em qualquer sistema de venda com estoque disputado (ingressos, passagens, e-commerce em promoção), o cenário crítico é a **corrida**: dois usuários veem o mesmo assento livre e clicam em "reservar" ao mesmo tempo. Sem proteção, os dois recebem "sucesso" — e alguém vai assistir o filme em pé.
+
+O Cinelock resolve isso, o primeiro request grava a chave e leva o assento; o segundo falha na hora. Não há janela de corrida porque o Redis processa um comando por vez. O resto da arquitetura (Kafka, consumer, Socket.io) existe pra tornar isso escalável e visível em tempo real, sem atrasos.
+
+Dá pra **ver funcionando** na página `/demo/concurrency`: um clique simula 30 pessoas disputando o mesmo assento — exatamente 1 leva, e a resolução acontece em poucos milissegundos.
+
+## Como funciona
+
+```
+reservar:   API ─ lock no Redis (SET NX EX) ─ publica no Kafka ─ responde na hora
+                                                    │
+atrás:                                    consumer lê o evento
+                                          ├─ persiste no Postgres (PENDING)
+                                          └─ emite seat:reserved via Socket.io
+                                             → o assento fica vermelho em todas as telas
+```
+
+- **Redis é a autoridade**: quem tem o lock, tem o assento. A API responde sem esperar o banco.
+- **Kafka desacopla**: a persistência e o aviso em tempo real acontecem num processo separado (o consumer). A API aguenta pico porque só empilha eventos.
+- **Socket.io** mantém todas as telas da mesma sessão sincronizadas: reservou → vermelho na hora; cancelou ou expirou → volta a livre.
+- **Expiração automática**: quem reserva tem 5 minutos pra confirmar. O TTL do Redis + keyspace notifications + um job de reconciliação garantem que nenhum assento fica preso.
+- **Retomar compra**: caiu a luz no meio do checkout? Voltando dentro do prazo, o site oferece continuar de onde parou, com o tempo restante correto.
+
+## Stack
+
+| Camada | Tecnologia |
+|---|---|
+| API | Node.js + TypeScript + Fastify + Zod |
+| Mensageria | Kafka (KRaft) + kafkajs |
+| Tempo real | Socket.io (com Redis adapter entre processos) |
+| Lock / cache | Redis (`SET NX EX`) |
+| Banco | PostgreSQL + Prisma |
+| Front | React + Vite |
+| Docs da API | Swagger em `/docs` |
 
 ```
 cinelock/
-├── back/     API Fastify + Prisma + Redis + Kafka (API + consumer)
-├── front/    React + Vite (frontend)
+├── back/     API + consumer (Fastify, Prisma, Kafka, Socket.io)
+├── front/    React + Vite
 ├── docker-compose.yml        infra: Postgres + Redis + Kafka
 └── docker-compose.full.yml   override que sobe também API + consumer + front
 ```
 
-## Stack
+## Rodando localmente
 
-- **API:** Node.js + TypeScript + Fastify + Zod (`back/`)
-- **Banco:** PostgreSQL (Prisma)
-- **Lock/Cache:** Redis (`SET NX EX 300`)
-- **Docs:** Swagger em `/docs`
-- **Front:** React + Vite (`front/`)
-
-## Rodando local
+Pré-requisitos: Docker e Node 22+. **Não precisa de nenhuma chave de API** — o catálogo de filmes vem congelado no repositório.
 
 ```bash
-docker compose up -d          # Postgres + Redis
+git clone <repo> && cd cinelock
+docker compose up -d              # Postgres + Redis + Kafka
 npm --prefix back install
 npm --prefix front install
-npm run db:migrate            # cria as tabelas
-npm run db:seed               # filmes, sessões e assentos pré-ocupados
-npm run dev                   # sobe API (3000) + front (5173) juntos
+cp back/.env.example back/.env
+npm run db:migrate                # cria as tabelas
+npm run db:seed                   # filmes, sessões e assentos pré-ocupados
+npm run dev                       # API (3000) + consumer + front (5173) juntos
 ```
 
-- Front: http://localhost:5173
-- API: http://localhost:3000
-- Swagger: http://localhost:3000/docs
+| O quê | Onde |
+|---|---|
+| Site | http://localhost:5173 |
+| Demo de concorrência | http://localhost:5173/demo/concurrency |
+| API | http://localhost:3000 |
+| Swagger | http://localhost:3000/docs |
 
 Os comandos na raiz (`dev`, `db:migrate`, `db:seed`, `lint`, `stress-test`) delegam pro `back/`.
 
-## Rodar tudo com Docker (API + consumer + front + infra)
+### Alternativa: tudo containerizado
 
-Sobe a aplicação inteira containerizada — infra (Postgres, Redis, Kafka) **mais** API, consumer e front num comando só:
+Sobe a aplicação inteira (infra + API + consumer + front) sem instalar nada além do Docker:
 
 ```bash
-cp back/.env.example back/.env     # preencha o TMDB_READ_TOKEN
 docker compose -f docker-compose.yml -f docker-compose.full.yml up --build -d
 docker compose -f docker-compose.yml -f docker-compose.full.yml --profile seed run --rm seed
 ```
 
-- Front: http://localhost:8080
-- API: http://localhost:3000
+Site em http://localhost:8080. As migrations rodam sozinhas; o seed popula o catálogo.
 
-As migrations rodam sozinhas (serviço `migrate`); o `seed` popula o catálogo (precisa do token do TMDB). No dia a dia de desenvolvimento continua valendo o modo acima (`docker compose up -d` só da infra + `npm run dev`).
+## Testando a concorrência na prática
 
-## Testando a concorrência
+**Pelo navegador:** abra a mesma sessão em duas abas, reserve um assento numa — ele fica vermelho na outra instantaneamente. Ou use a página `/demo/concurrency`, que dispara 30 tentativas simultâneas no mesmo assento e mostra quem venceu.
 
-O `POST /reservations` tem rate limit apertado (10/min). Pro stress test de 30 requests não tomar `429`, suba a API com o limite desligado:
+**Pelo terminal:** o stress test dispara 30 `POST /reservations` paralelos pro mesmo assento e confere que **exatamente 1** consegue:
 
 ```bash
 RATE_LIMIT_ENABLED=false npm --prefix back run dev
 ```
 
-Em outro terminal:
-
 ```bash
 npm run stress-test
 ```
 
-Dispara 30 `POST /reservations` simultâneos pro mesmo assento. Resultado esperado: **1 sucesso, 29 conflitos (409)** — o `SET NX` do Redis garante que só o primeiro request cria o lock.
+## Regras de negócio
 
-## Como funciona a reserva
+- Máximo de **6 ingressos por compra** (validado no backend).
+- Reserva segura o assento por **5 minutos**; sem confirmação, libera sozinho.
+- Cancelar no checkout libera os assentos **na hora** pra outros compradores.
+- Rate limiting por IP (Redis como store, compartilhado entre instâncias).
 
-1. Selecionar assento é só feedback visual — não trava nada.
-2. Clicar em **Reservar** executa `SET seat:{sessionId}:{seat} {clientId} NX EX 300` no Redis.
-3. Se a chave já existe, a API responde `409` na hora.
-4. Se o lock foi criado, a reserva é persistida como `PENDING` com expiração em 5 minutos.
-5. Sem confirmação no prazo, o TTL do Redis libera o assento automaticamente.
+## Créditos
 
-A constraint `@@unique([sessionId, seat, status])` no Postgres é a última linha de defesa caso algo escape do Redis.
-
-## Roadmap
-
-- [x] Fase 1 — MVP: lock no Redis, rate limiting, Swagger, stress test, front básico
-- [x] Fase 2 — Kafka (KRaft) + Socket.io em tempo real + expiração via keyspace notifications
-- [x] Fase 3 — Docker Compose completo (API, consumer, front)
-- [ ] Fase 4 — Deploy em VPS com Nginx + HTTPS
+Dados e pôsteres dos filmes via [TMDB](https://www.themoviedb.org/) (snapshot local — o site não depende da API deles pra funcionar).
