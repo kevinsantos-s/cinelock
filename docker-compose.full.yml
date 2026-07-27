@@ -1,0 +1,83 @@
+# Sobe a aplicação inteira containerizada, em cima da infra do docker-compose.yml.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.full.yml up --build
+#
+# Os serviços de app falam com a infra pelo NOME do serviço (rede interna do compose):
+# postgres:5432, redis:6379, kafka:29092.
+
+services:
+  # One-shot: aplica as migrations e sai. API e consumer esperam ele terminar.
+  # Usa o estágio de build (é quem tem o Prisma CLI; o runtime não tem).
+  migrate:
+    build:
+      context: ./back
+      target: build
+    image: cinelock-back-migrate
+    command: npx prisma migrate deploy
+    environment:
+      DATABASE_URL: postgresql://cinelock:cinelock@postgres:5432/cinelock
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: ./back
+    image: cinelock-back
+    container_name: cinelock-api
+    command: node dist/src/server.js
+    ports:
+      - '3000:3000'
+    environment:
+      DATABASE_URL: postgresql://cinelock:cinelock@postgres:5432/cinelock
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: kafka:29092
+      PORT: 3000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  consumer:
+    image: cinelock-back
+    container_name: cinelock-consumer
+    command: node dist/src/consumer.js
+    environment:
+      DATABASE_URL: postgresql://cinelock:cinelock@postgres:5432/cinelock
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: kafka:29092
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  front:
+    build:
+      context: ./front
+      args:
+        # O navegador (no host) chama a API pela porta publicada.
+        VITE_API_URL: http://localhost:3000
+    container_name: cinelock-front
+    ports:
+      - '8080:80'
+    depends_on:
+      - api
+
+  # Popula o catálogo a partir do snapshot commitado (sem TMDB, sem token). Fica num
+  # profile pra não rodar sozinho: docker compose ... --profile seed run --rm seed
+  seed:
+    image: cinelock-back
+    profiles: ['seed']
+    # Roda o seed compilado (a imagem de runtime não tem tsx).
+    command: node dist/prisma/seed.js
+    environment:
+      DATABASE_URL: postgresql://cinelock:cinelock@postgres:5432/cinelock
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
