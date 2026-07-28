@@ -1,0 +1,18 @@
+# Configuração do reverse proxy. O Caddy pega certificado HTTPS sozinho
+# (Let's Encrypt) pra cada domínio abaixo e reencaminha pro container certo.
+# WebSocket (Socket.IO da API) passa automaticamente.
+
+{
+	# E-mail usado pelo Let's Encrypt pra avisos de expiração de certificado.
+	email kelvo1502@gmail.com
+}
+
+# Front (site estático servido pelo nginx dentro do container).
+cinelock.dev {
+	reverse_proxy front:80
+}
+
+# API (Fastify + Socket.IO).
+api.cinelock.dev {
+	reverse_proxy api:3000
+}
