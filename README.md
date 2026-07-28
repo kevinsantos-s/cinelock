@@ -6,7 +6,7 @@ Sistema de reserva de assentos de cinema construído pra responder uma pergunta 
 
 Em qualquer sistema de venda com estoque disputado (ingressos, passagens, e-commerce em promoção), o cenário crítico é a **corrida**: dois usuários veem o mesmo assento livre e clicam em "reservar" ao mesmo tempo. Sem proteção, os dois recebem "sucesso" — e alguém vai assistir o filme em pé.
 
-O Cinelock resolve isso, o primeiro request grava a chave e leva o assento; o segundo falha na hora. Não há janela de corrida porque o Redis processa um comando por vez. O resto da arquitetura (Kafka, consumer, Socket.io) existe pra tornar isso escalável e visível em tempo real, sem atrasos.
+O Cinelock resolve: o primeiro request grava a chave e leva o assento; o segundo falha na hora. Não há janela de corrida porque o Redis processa um comando por vez. O resto da arquitetura (Kafka, consumer, Socket.io) existe pra tornar isso escalável e visível em tempo real, sem atrasos.
 
 Dá pra **ver funcionando** na página `/demo/concurrency`: um clique simula 30 pessoas disputando o mesmo assento — exatamente 1 leva, e a resolução acontece em poucos milissegundos.
 
